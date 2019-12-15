@@ -4,7 +4,7 @@ Description: >
             IT Automation using Step Machine 
 Parameters:
     NotificationEmail:
-        Default: jainakas@amazon.com
+        Default: Your email ID
         Type: String
         Description: Email address to subscribe to SNS topic and receive notifications from IT Operations events
 

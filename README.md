@@ -30,7 +30,7 @@ We can change the above workflow to below architecture using AWS Step functions.
 
 
 ## About the repo
-This code repsoitory will help you do create a workflow engine template that you can re-use.
+This code repsoitory will help you to create a workflow engine template that you can re-use for your automation requirements.
 
 ITAutomationWorkFlow.yaml will create following object in your environment
 
@@ -46,6 +46,21 @@ State machine details are there in stepfunction.json
 A Lambda to resolve the incident. For example, closign the SSH port or removing the public access for S3 bucket.
 
 5. PrepareMessage lambda function: A Lambda function to close ticket and prepare the message/email for Operations manager. 
+
+## How to Use?
+
+Open ITAutomationWorkFlow.yaml in the root directory
+
+1. Update the notificaiton email id: This will be the id where the notificaiton email will be sent when an incident occurs in your enviroment. You can also change it as part of running the Cloud Formation template on AWS Console.
+
+2. Update the CodeUri path of all Lambda functions: Right now it is pointing to my S3 bucket. You can go to Artifacts folder and upload all the source code of Lambda and Sate machine in your account and then replace my S3 bucket path with yours.
+
+You can now go to AWS CloudFormation console and run the ITAutomationWorkFlow.yaml template. It will create 5 lambda functions and a state machine. You can see it in the output section of CloudFormation execution.
+
+## Configuring Event to target Step function
+Once the workflow engine is ready. You can configure events in CloudWatch and select State machine (AWS Step Functions) as the target.
+
+This will trigger the State Machine when you an event occurs and you can track the workflow in Step Functions.
 
 ## License
 
