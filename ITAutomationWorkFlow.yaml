@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: > 
+            IT Automation using Step Machine 
+Parameters:
+    NotificationEmail:
+        Default: jainakas@amazon.com
+        Type: String
+        Description: Email address to subscribe to SNS topic and receive notifications from IT Operations events
+
+## GLobals
+
+Globals:
+    Function:
+        Runtime: python3.7
+        Timeout: 30
+        Tracing: Active
+        Tags:
+            Project: ITAutomationFrameworkV1
+
+Resources:
+
+## Lambda
+
+    EvaluateRequest:
+        Type: AWS::Serverless::Function
+        Properties:
+            Description: It will evaluate the incident and take a decision on the next steps. It will decide whether an automation process is required or a manual approval is required or nothing has to be done.
+            #CodeUri: ./artifacts/EvaluateRequest.zip
+            CodeUri: 's3://devdayblogwebsite/artifacts/EvaluateRequest.zip'
+            Handler: lambda_function.lambda_handler
+            Role: !Sub ${LambdaServiceRole.Arn}
+
+    OpenIncident:
+        Type: AWS::Serverless::Function
+        Properties:
+            Description: It will open the incident ticket.
+            #CodeUri: ./artifacts/OpenIncident.zip
+            CodeUri: 's3://devdayblogwebsite/artifacts/OpenIncidentTicket.zip'
+            Handler: lambda_function.lambda_handler
+            Role: !Sub ${LambdaServiceRole.Arn}
+
+    CloseIncident:
+        Type: AWS::Serverless::Function
+        Properties:
+            Description: It will close the incident ticket.
+            #CodeUri: ./artifacts/OpenIncident.zip
+            CodeUri: 's3://devdayblogwebsite/artifacts/OpenIncidentTicket.zip'
+            Handler: lambda_function.lambda_handler
+            Role: !Sub ${LambdaServiceRole.Arn}
+
+    ResolveIncident:
+        Type: AWS::Serverless::Function
+        Properties:
+            Description: It will resolve the incident. For example closing the SSH port or removing the public access for S3 bucket.
+            #CodeUri: ./artifacts/ResolveIncident.zip
+            CodeUri: 's3://devdayblogwebsite/artifacts/ResolveIncident.zip'
+            Handler: lambda_function.lambda_handler
+            Role: !Sub ${LambdaServiceRoleForResolveIncident.Arn}
+
+    PrepareMessage:
+        Type: AWS::Serverless::Function
+        Properties:
+            Description: It will send message/email to Operations manager. 
+            #CodeUri: ./artifacts/PrepareMessage.zip
+            CodeUri: 's3://devdayblogwebsite/artifacts/PrepareMessage.zip'
+            Handler: lambda_function.lambda_handler
+            Role: !Sub ${LambdaServiceRole.Arn}
+ 
+
+## Step functions
+
+    StepFunctionsStateMachine:
+        Type: "AWS::StepFunctions::StateMachine"
+        Properties:
+            StateMachineName: !Join 
+                                  - '-'
+                                  - -  'sfn'
+                                    -  !Ref 'AWS::StackName'
+            RoleArn: !GetAtt StepFunctionsServiceRole.Arn
+            DefinitionString: !Sub |-
+                {
+                  "StartAt": "EvaluateRequest",
+                  "States": {
+                    "EvaluateRequest": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:lambda:ap-south-1:039553791689:function:EvaluateRequest",
+                      "Next": "ActionRequest",
+                      "ResultPath": "$.EvaluateRequestOutput"
+                    },
+                    "ActionRequest": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "NON_COMPLIANT",
+                          "Next": "OpenIncidentTicket"
+                        },
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "COMPLIANT",
+                          "Next": "NoActionRequired"
+                        },
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "NOT_APPLICABLE",
+                          "Next": "NoActionRequired"
+                        },
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "MANUAL",
+                          "Next": "NotifyOperationsTeam"
+                        }
+                      ],
+                      "Default": "NotifyOperationsTeam"
+                    },
+                    "OpenIncidentTicket": {
+                      "Type": "Task",
+                      "Resource": "${OpenIncident.Arn}",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 1,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 1
+                        }
+                      ],
+                      "ResultPath": "$.TicketCreationResponse",
+                      "Next": "ResolveIssue"
+                    },
+                    "ResolveIssue": {
+                      "Type": "Task",
+                      "Resource": "${ResolveIncident.Arn}",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "HandledError"
+                          ],
+                          "Next": "NotifyOperationsTeam"
+                        }
+                      ],
+                      "ResultPath": "$.ResolveTicketResponse",
+                      "Next": "CloseTicket"
+                    },
+                    "CloseTicket": {
+                      "Type": "Task",
+                      "Resource":  "${PrepareMessage.Arn}",
+                      "ResultPath": "$.CloseTicketResponse",
+                      "Next": "NotifyOperationsTeam"
+                    },
+                    "NoActionRequired": {
+                      "Type": "Succeed"
+                    },
+                    "NotifyOperationsTeam": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sns:publish",
+                      "Parameters": {
+                        "TopicArn": "${!Ref StepFunctionsStateMachine}",
+                        "Message.$": "$.CloseTicketResponse.message",
+                        "MessageStructure": "json",
+                        "MessageAttributes": {
+                          "myattributeno1": {
+                            "DataType": "String",
+                            "StringValue": "value of my attribute no 1"
+                          },
+                          "myattributeno2": {
+                            "DataType": "String",
+                            "StringValue": "value of my attribute no 2"
+                          }
+                        }
+                      },
+                      "End": true
+                    }
+                  }
+                }
+
+####    IAM 
+
+    StepFunctionsServiceRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            Path: !Join ["", ["/", !Ref "AWS::StackName", "/"]]
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess"
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    -
+                        Sid: "AllowStepFunctionsServiceToAssumeRole"
+                        Effect: "Allow"
+                        Action: 
+                            - "sts:AssumeRole"
+                        Principal:
+                            Service:
+                                - !Sub "states.${AWS::Region}.amazonaws.com"
+            Policies:
+                -   PolicyName: "CallLambdaFunctions"
+                    PolicyDocument:
+                        Version: '2012-10-17'
+                        Statement:
+                            -   Effect: "Allow"
+                                Action:
+                                    - "lambda:InvokeFunction"
+                                Resource: 
+                                    - !Sub ${EvaluateRequest.Arn}
+                                    - !Sub ${OpenIncident.Arn}
+                                    - !Sub ${ResolveIncident.Arn}
+                                    - !Sub ${PrepareMessage.Arn}
+      
+                -   PolicyName: "SNSPublishMessagePolicy"
+                    PolicyDocument:
+                        Version: '2012-10-17'
+                        Statement:
+                            -   Effect: "Allow"
+                                Action:
+                                    - "sns:Publish"
+                                Resource: !Ref StepFunctionsSNSTopic
+
+    LambdaServiceRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+          Path: !Join ["", ["/", !Ref "AWS::StackName", "/"]]
+          ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+                - "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+          AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    -
+                        Sid: "AllowLambdaServiceToAssumeRole"
+                        Effect: "Allow"
+                        Action: 
+                            - "sts:AssumeRole"
+                        Principal:
+                            Service:
+                              - "lambda.amazonaws.com"
+
+    LambdaServiceRoleForResolveIncident:
+        Type: "AWS::IAM::Role"
+        Properties:
+          Path: !Join ["", ["/", !Ref "AWS::StackName", "/"]]
+          ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+                - "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+          AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    -
+                        Sid: "AllowLambdaServiceToAssumeRole"
+                        Effect: "Allow"
+                        Action: 
+                            - "sts:AssumeRole"
+                        Principal:
+                            Service:
+                              - "lambda.amazonaws.com"
+
+    LambdaRoleAddonPolicies: 
+        Type: "AWS::IAM::Policy"
+        Properties: 
+            PolicyName: AllowSecurityGroupAccess
+            PolicyDocument: 
+                Statement: 
+                 - Sid: "SecurityGroupPolicy"
+                   Effect: "Allow"
+                   Action: 
+                      - "ec2:RevokeSecurityGroupIngress"
+                      - "ec2:DescribeSecurityGroupReferences"
+                      - "ec2:RevokeSecurityGroupEgress"
+                      - "ec2:ApplySecurityGroupsToClientVpnTargetNetwork"
+                      - "ec2:DescribeSecurityGroups"
+                   Resource: '*'
+            Roles: 
+              - Ref: "LambdaServiceRoleForResolveIncident"
+  
+    StepFunctionsSNSTopic:
+        Type: AWS::SNS::Topic
+        Properties:
+            Subscription:
+            - Endpoint: !Ref NotificationEmail
+              Protocol: email
+
+Outputs:
+    StepFunctionsStateMachine:
+        Description: Step Functions State Machine ARN
+        Value: !Ref StepFunctionsStateMachine
+    
+    EvaluateRequestFunctionArn:
+        Description: Evaluate Function ARN
+        Value: !GetAtt EvaluateRequest.Arn
+    
+    OpenIncidentFunctionArn:
+        Description: Open Incident ARN
+        Value: !GetAtt OpenIncident.Arn
+    
+    CloseIncidentFunctionArn:
+        Description: Close Incident ARN
+        Value: !GetAtt CloseIncident.Arn
+
+    ResolveIncidentFunctionArn:
+        Description: Resolve Incident Function ARN
+        Value: !GetAtt ResolveIncident.Arn
+    
+    PrepareMessageFunctionArn:
+        Description: Prepare Mesage Function ARN
+        Value: !GetAtt PrepareMessage.Arn

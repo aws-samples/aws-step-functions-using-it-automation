@@ -1,0 +1,96 @@
+   {
+                  "StartAt": "EvaluateRequest",
+                  "States": {
+                    "EvaluateRequest": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:lambda:ap-south-1:039553791689:function:EvaluateRequest",
+                      "Next": "ActionRequest",
+                      "ResultPath": "$.EvaluateRequestOutput"
+                    },
+                    "ActionRequest": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "NON_COMPLIANT",
+                          "Next": "OpenIncidentTicket"
+                        },
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "COMPLIANT",
+                          "Next": "NoActionRequired"
+                        },
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "NOT_APPLICABLE",
+                          "Next": "NoActionRequired"
+                        },
+                        {
+                          "Variable": "$.EvaluateRequestOutput.body.complianceType",
+                          "StringEquals": "MANUAL",
+                          "Next": "NotifyOperationsTeam"
+                        }
+                      ],
+                      "Default": "NotifyOperationsTeam"
+                    },
+                    "OpenIncidentTicket": {
+                      "Type": "Task",
+                      "Resource": "${OpenIncident.Arn}",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 1,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 1
+                        }
+                      ],
+                      "ResultPath": "$.TicketCreationResponse",
+                      "Next": "ResolveIssue"
+                    },
+                    "ResolveIssue": {
+                      "Type": "Task",
+                      "Resource": "${ResolveIncident.Arn},
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "HandledError"
+                          ],
+                          "Next": "NotifyOperationsTeam"
+                        }
+                      ],
+                      "ResultPath": "$.ResolveTicketResponse",
+                      "Next": "CloseTicket"
+                    },
+                    "CloseTicket": {
+                      "Type": "Task",
+                      "Resource":  "${PrepareMessage.Arn}",
+                      "ResultPath": "$.CloseTicketResponse",
+                      "Next": "NotifyOperationsTeam"
+                    },
+                    "NoActionRequired": {
+                      "Type": "Succeed"
+                    },
+                    "NotifyOperationsTeam": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sns:publish",
+                      "Parameters": {
+                        "TopicArn": "${!Ref StepFunctionsStateMachine}",
+                        "Message.$": "$.CloseTicketResponse.message",
+                        "MessageStructure": "json",
+                        "MessageAttributes": {
+                          "myattributeno1": {
+                            "DataType": "String",
+                            "StringValue": "value of my attribute no 1"
+                          },
+                          "myattributeno2": {
+                            "DataType": "String",
+                            "StringValue": "value of my attribute no 2"
+                          }
+                        }
+                      },
+                      "End": true
+                    }
+                  }
+                }
